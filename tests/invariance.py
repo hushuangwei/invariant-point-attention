@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from einops import repeat
 from invariant_point_attention import InvariantPointAttention, IPABlock
-from invariant_point_attention.utils import rot
+from invariant_point_attention.utils import rot, frame_aligned_point_error
 
 def test_ipa_invariance():
     attn = InvariantPointAttention(
@@ -91,3 +91,26 @@ def test_ipa_block_invariance():
 
     diff = (attn_out - rotated_attn_out).max()
     assert diff <= 1e-6, 'must be invariant to global rotation'
+
+def test_fape():
+    b, n, d = 1, 16, 3
+    pred_rots = repeat(rot(*torch.randn(d)), 'r1 r2 -> b n r1 r2', b=b, n=n)
+    pred_trans = torch.randn(b, n, d)
+    target_rots = repeat(rot(*torch.randn(d)), 'r1 r2 -> b n r1 r2', b=b, n=n)
+    target_trans = torch.randn(b, n, d)
+    pred_positions = torch.randn(b, n, d)
+    target_positions = torch.randn(b, n, d)
+    pred_frames = (pred_rots, pred_trans)
+    target_frames = (target_rots, target_trans)
+    frames_mask, positions_mask = None, None  # not implemented yet, not as placeholders
+    # loss = frame_aligned_point_error(
+    #     pred_frames, target_frames, frames_mask,
+    #     pred_positions, target_positions, positions_mask)
+    loss = frame_aligned_point_error(
+        pred_frames, pred_frames, frames_mask,
+        pred_positions, pred_positions, positions_mask)
+
+    assert loss <= 0.0001, 'identical transformation shall generate zero loss...'
+
+if __name__ == '__main__':
+    test_fape()
