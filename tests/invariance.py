@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from einops import repeat
 from invariant_point_attention import InvariantPointAttention, IPABlock
-from invariant_point_attention.utils import rot, frame_aligned_point_error
+from invariant_point_attention.utils import rot, frame_aligned_point_error, frame_aligned_point_error2
 
 def test_ipa_invariance():
     attn = InvariantPointAttention(
@@ -93,24 +93,30 @@ def test_ipa_block_invariance():
     assert diff <= 1e-6, 'must be invariant to global rotation'
 
 def test_fape():
-    b, n, d = 1, 16, 3
-    pred_rots = repeat(rot(*torch.randn(d)), 'r1 r2 -> b n r1 r2', b=b, n=n)
-    pred_trans = torch.randn(b, n, d)
-    target_rots = repeat(rot(*torch.randn(d)), 'r1 r2 -> b n r1 r2', b=b, n=n)
-    target_trans = torch.randn(b, n, d)
-    pred_positions = torch.randn(b, n, d)
-    target_positions = torch.randn(b, n, d)
+    b, n, d = 3, 16, 3
+    angles = torch.tensor([2, 3, 4], dtype=torch.float)  # = torch.randn(d)
+
+    pred_rots = repeat(rot(*angles), 'r1 r2 -> b n r1 r2', b=b, n=n)
+    pred_trans = torch.ones(b, n, d, dtype=torch.float) #torch.randn(b, n, d)
+    pred_positions = torch.ones(b, n, d, dtype=torch.float)
+
+    target_rots = repeat(rot(*angles + 1.0), 'r1 r2 -> b n r1 r2', b=b, n=n)
+    #target_rots = repeat(rot(*torch.randn(d)), 'r1 r2 -> b n r1 r2', b=b, n=n)
+    target_trans = pred_trans + 1.0 #torch.randn(b, n, d)
+    target_positions = pred_positions + 1.0 #torch.randn(b, n, d)
+    target_positions[:, :4, :] = target_positions[:, :4, :] + 5.0
+
     pred_frames = (pred_rots, pred_trans)
     target_frames = (target_rots, target_trans)
-    frames_mask, positions_mask = None, None  # not implemented yet, not as placeholders
-    # loss = frame_aligned_point_error(
-    #     pred_frames, target_frames, frames_mask,
-    #     pred_positions, target_positions, positions_mask)
-    loss = frame_aligned_point_error(
-        pred_frames, pred_frames, frames_mask,
-        pred_positions, pred_positions, positions_mask)
 
-    assert loss <= 0.0001, 'identical transformation shall generate zero loss...'
+    frames_mask, positions_mask = None, None  # not implemented yet, not as placeholders
+
+    loss = frame_aligned_point_error(
+        pred_frames, pred_positions, pred_frames, pred_positions,
+        #pred_frames, pred_positions, target_frames, target_positions,
+        frames_mask, positions_mask)
+
+    assert loss <= 0.01, 'identical transformation shall generate zero loss: loss = {}'.format(loss)
 
 if __name__ == '__main__':
     test_fape()

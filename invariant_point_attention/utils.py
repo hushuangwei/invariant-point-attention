@@ -3,6 +3,7 @@ from torch import sin, cos, atan2, acos
 from functools import wraps
 from typing import Optional
 from einops import rearrange
+import torch.nn.functional as F
 
 def cast_torch_tensor(fn):
     @wraps(fn)
@@ -35,8 +36,11 @@ def rot(alpha, beta, gamma):
 below are fape-related utilities, translated from AF2 original implementation
 """
 
-def rots_mul_vecs(rots, trans):
-    return torch.einsum("b n i j, b n j ->b n i", rots, trans)
+def rots_mul_vecs(rots, vecs, cross_mode=False):
+    if cross_mode:
+        return torch.einsum("b n i j, b m j -> b n m i", rots, vecs)
+    else:
+        return torch.einsum("b n i j, b n j ->b n i", rots, vecs)
 
 def invert_rigids(rigids):
     rots, trans = rigids
@@ -45,37 +49,34 @@ def invert_rigids(rigids):
     inv_trans = -t
     return inv_rots, inv_trans
 
-def rigid_mul_vecs(rigids, vecs):
+def rigid_mul_vecs(rigids, vecs, cross_mode=False):
     rots, trans = rigids
-    return rots_mul_vecs(rots, vecs) + trans
+    trans = trans.unsqueeze(1)
+    return rots_mul_vecs(rots, vecs, cross_mode) + trans
 
 def frame_aligned_point_error(
-        pred_frames, target_frames, frames_mask,
-        pred_positions, target_positions, positions_mask,
+        pred_frames, pred_positions, target_frames, target_positions,
+        frames_mask=None, positions_mask=None,
         length_scale=10.0, l1_clamp_distance: Optional[float] = None, epsilon=1e-4):
 
     # Compute array of predicted/target positions in the predicted frames.
-    local_pred_pos = rigid_mul_vecs(invert_rigids(pred_frames), pred_positions)
-    local_target_pos = rigid_mul_vecs(invert_rigids(target_frames), target_positions)
+    local_pred_pos = rigid_mul_vecs(invert_rigids(pred_frames), pred_positions, cross_mode=True)
+    local_target_pos = rigid_mul_vecs(invert_rigids(target_frames), target_positions, cross_mode=True)
 
     # Compute errors between the structures.
-    # Note: torch.cdist() uses decomposition to run fast.
-    error_dist = torch.sqrt(
-        torch.cdist(local_pred_pos, local_target_pos, p=2)
-        + epsilon)
+    error_dist = torch.sqrt((local_pred_pos - local_target_pos).pow(2) + epsilon)
 
     if l1_clamp_distance:
         error_dist = torch.clamp(error_dist, max=l1_clamp_distance)
 
     normed_error = error_dist / length_scale
     # todo: implement masking
-    # normed_error *= jnp.expand_dims(frames_mask, axis=-1)
-    # normed_error *= jnp.expand_dims(positions_mask, axis=-2)
-    #
-    # normalization_factor = (
-    #         jnp.sum(frames_mask, axis=-1) *
-    #         jnp.sum(positions_mask, axis=-1))
-    # return (jnp.sum(normed_error, axis=(-2, -1)) /
-    #         (epsilon + normalization_factor))
+    if frames_mask is not None and positions_mask is not None:
+        normed_error *= frames_mask.unsqueeze(-1)
+        normed_error *= positions_mask.unsqueeze(-2)
 
-    return torch.mean(normed_error)  # mean of all elements
+        normalization_factor = torch.sum(frames_mask, dim=-1) * torch.sum(positions_mask, dim=-1)
+
+        return torch.sum(normed_error, dim=(-2, -1)) / (epsilon + normalization_factor)
+    else:
+        return torch.mean(normed_error)  # mean of all elements
